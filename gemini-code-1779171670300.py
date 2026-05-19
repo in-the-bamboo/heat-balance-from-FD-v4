@@ -123,9 +123,9 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
                     vol = mesh.bounding_box.volume
 
                 # 点が含まれているかチェックし、部屋名と体積をストック
-                if mesh.contains_points([probe_plus])[0]:
+                if mesh.contains([probe_plus])[0]:
                     plus_candidates.append((room_name, vol))
-                if mesh.contains_points([probe_minus])[0]:
+                if mesh.contains([probe_minus])[0]:
                     minus_candidates.append((room_name, vol))
 
             # ヒットした候補の中から「最も体積(vol)が小さい部屋」を正解とする
