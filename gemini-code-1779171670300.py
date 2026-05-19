@@ -109,10 +109,9 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             probe_plus = center_pt + (normal_vec * offset_dist)
             probe_minus = center_pt - (normal_vec * offset_dist)
 
-            # 4. どの部屋のメッシュ（立体）に点が含まれるか判定
-            found_plus_room = "外部(未特定)"
-            found_minus_room = "外部(未特定)"
-
+            plus_candidates = []
+            minus_candidates = []
+            
             for room_name, mesh in room_meshes.items():
                 # 安全にメッシュの体積を取得（万が一閉じられていない場合は外枠の体積で代用）
                 try:
