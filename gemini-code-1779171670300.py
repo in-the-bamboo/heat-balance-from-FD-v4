@@ -114,12 +114,23 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             found_minus_room = "外部(未特定)"
 
             for room_name, mesh in room_meshes.items():
-                # contains_pointsは[[x,y,z]]形式の配列を受け取り、[True/False]の配列を返す
-                if mesh.contains([probe_plus])[0]:
-                    found_plus_room = room_name
-                if mesh.contains([probe_minus])[0]:
-                    found_minus_room = room_name
+                # 安全にメッシュの体積を取得（万が一閉じられていない場合は外枠の体積で代用）
+                try:
+                    vol = abs(mesh.volume)
+                    if vol < 1e-5:
+                        vol = mesh.bounding_box.volume
+                except:
+                    vol = mesh.bounding_box.volume
 
+                # 点が含まれているかチェックし、部屋名と体積をストック
+                if mesh.contains_points([probe_plus])[0]:
+                    plus_candidates.append((room_name, vol))
+                if mesh.contains_points([probe_minus])[0]:
+                    minus_candidates.append((room_name, vol))
+
+            # ヒットした候補の中から「最も体積(vol)が小さい部屋」を正解とする
+            found_plus_room = min(plus_candidates, key=lambda x: x[1])[0] if plus_candidates else "外部(未特定)"
+            found_minus_room = min(minus_candidates, key=lambda x: x[1])[0] if minus_candidates else "外部(未特定)"
             # 両方とも外部になってしまった場合は警告ログを出してスキップ
             if found_plus_room == "外部(未特定)" and found_minus_room == "外部(未特定)":
                 logs.append(f"⚠️ スキップ: '{file_name}' - 判定点がどの部屋のSTL内にも存在しませんでした。(offset要調整)")
