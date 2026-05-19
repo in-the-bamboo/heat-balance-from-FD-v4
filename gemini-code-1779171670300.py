@@ -498,9 +498,9 @@ if st.session_state['analyzed']:
     with tab3:
         st.markdown("### 📥 データダウンロード")
         col_dl1, col_dl2, col_dl3 = st.columns(3)
-        col_dl1.download_button("表1 (開口部風量・移動熱量)", results_df.to_csv(index=False).encode('shift_jis'), "results_raw.csv")
-        col_dl2.download_button("表2 (処理熱量)", room_heat_df.to_csv(index=False).encode('shift_jis'), "results_heat.csv")
-        col_dl3.download_button("表3 (風量収支)", room_flow_df.to_csv(index=False).encode('shift_jis'), "results_flow.csv")
+        col_dl1.download_button("表1 (開口部風量・移動熱量)", results_df.to_csv(index=False).encode('utf-8-sig'), "results_raw.csv")
+        col_dl2.download_button("表2 (処理熱量)", room_heat_df.to_csv(index=False).encode('utf-8-sig'), "results_heat.csv")
+        col_dl3.download_button("表3 (風量収支)", room_flow_df.to_csv(index=False).encode('utf-8-sig'), "results_flow.csv")
         st.divider()
 
         st.markdown("### (表1) 開口部別 風量・移動熱量")
