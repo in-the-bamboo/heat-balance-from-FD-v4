@@ -1,177 +1,503 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import trimesh
 import os
+import itertools
+import matplotlib.pyplot as plt
+import matplotlib.patches mpatches
 import io
+import matplotlib_fontja
+import numpy as np
+import trimesh  # 3Dメッシュの内外判定用ライブラリ
 
-# --- 💡 追加：STLファイルを一括で読み込む関数 ---
-def load_stl_meshes(stl_files):
-    """アップロードされた複数のSTLファイルを読み込んで辞書形式にする"""
-    meshes = {}
+# ==========================================
+# 1. 関数定義
+# ==========================================
+
+def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_dist):
+    """
+    STLファイル（部屋の立体データ）を使って、開口部CSVがどの部屋を繋いでいるかを自動判定する
+    """
     logs = []
+    room_meshes = {}
+
+    # --- 1. 部屋のSTLファイルを読み込んで辞書化 ---
+    if not stl_files:
+        return None, None, None, ["❌ STLファイルがアップロードされていません。"]
+    
     for stl_file in stl_files:
         try:
-            # ファイル名（拡張子なし）を部屋名にする
             room_name = os.path.splitext(stl_file.name)[0]
-            
-            # Streamlitのアップロードファイルをtrimeshで読み込む
-            stl_file.seek(0)
-            mesh = trimesh.load(io.BytesIO(stl_file.read()), file_type='stl')
-            
-            # 複数のメッシュが混ざっている場合の結合処理
-            if isinstance(mesh, trimesh.Scene):
-                if len(mesh.geometry) > 0:
-                    mesh = trimesh.util.concatenate(list(mesh.geometry.values()))
-                else:
-                    logs.append(f"⚠️ {stl_file.name}: 有効な形状が含まれていません")
-                    continue
-            
-            meshes[room_name] = mesh
+            # バイナリとして読み込み
+            stl_data = io.BytesIO(stl_file.read())
+            mesh = trimesh.load(stl_data, file_type='stl')
+            room_meshes[room_name] = mesh
+            logs.append(f"📁 STL読み込み成功: {room_name}")
         except Exception as e:
-            logs.append(f"❌ {stl_file.name} の読み込みに失敗: {e}")
-            
-    return meshes, logs
-# --- 1. 空間判定ロジック（L型対応・デバッグなし版） ---
-def detect_rooms_from_coords(df, meshes, offset_dist=0.05):
-    """座標から開口部の軸と、隣接する2つの部屋を正確に判定する"""
-    if not all(col in df.columns for col in ['X[m]', 'Y[m]', 'Z[m]']):
-        return None, None, None, "座標列(X[m], Y[m], Z[m])がありません"
+            logs.append(f"❌ STL読み込み失敗: {stl_file.name} ({e})")
 
-    # 中心座標の計算
-    cx, cy, cz = df['X[m]'].mean(), df['Y[m]'].mean(), df['Z[m]'].mean()
+    opening_results_list = []
 
-    # 判定軸の特定
-    stds = {'x': df['X[m]'].std(), 'y': df['Y[m]'].std(), 'z': df['Z[m]'].std()}
-    detected_axis = min(stds, key=stds.get)
+    # --- 2. 各CFDファイルをループ処理 ---
+    total_files = len(cfd_files)
+    progress_bar = st.progress(0)
 
-    # オフセット点の計算
-    pt_plus = [cx, cy, cz]
-    pt_minus = [cx, cy, cz]
-    axis_idx = {'x': 0, 'y': 1, 'z': 2}[detected_axis]
-    pt_plus[axis_idx] += offset_dist
-    pt_minus[axis_idx] -= offset_dist
+    for i, uploaded_file in enumerate(cfd_files):
+        progress_bar.progress((i + 1) / total_files)
+        
+        file_name = uploaded_file.name
+        file_key = os.path.splitext(file_name)[0]
 
-    # Ray-Casting（レイキャスト）による内外判定
-    def is_inside(mesh, pt):
-        min_b, max_b = mesh.bounds
-        if not (min_b[0] <= pt[0] <= max_b[0] and 
-                min_b[1] <= pt[1] <= max_b[1] and 
-                min_b[2] <= pt[2] <= max_b[2]):
-            return False
+        detected_axis = None
+
+        # --- (A) 全データと軸情報の読み込み ---
         try:
-            locations, _, _ = mesh.ray.intersects_location(
-                ray_origins=np.array([pt]), ray_directions=np.array([[0.0, 0.0, 1.0]])
-            )
-            return len(locations) % 2 == 1
-        except:
-            return False
+            uploaded_file.seek(0)
+            # 軸判定用に先頭部分をチェック
+            df_temp = pd.read_csv(uploaded_file, skiprows=2, nrows=1, encoding='cp932')
+            axis_col = [c for c in df_temp.columns if '流量算出面' in str(c)]
 
-    room_plus = "外気(未定義)"
-    room_minus = "外気(未定義)"
-    sorted_meshes = sorted(meshes.items(), key=lambda item: item[1].bounding_box.volume)
+            if axis_col:
+                raw_axis_value = str(df_temp[axis_col[0]].iloc[0]).strip()
+                if raw_axis_value:
+                    detected_axis = raw_axis_value[0].lower() # X, Y, Z -> x, y, z
+            else:
+                logs.append(f"⚠️ {file_name}: '流量算出面' 列が見つからないためスキップします。")
+                continue
 
-    # Plus側の判定（小さい順に調べて、見つかったらそこでストップ）
-    for room_name, mesh in sorted_meshes:
-        if is_inside(mesh, pt_plus): 
-            room_plus = room_name
-            break  # 一番小さい空間（例:エアコン）に入っていたら即確定！
-
-    # Minus側の判定
-    for room_name, mesh in sorted_meshes:
-        if is_inside(mesh, pt_minus): 
-            room_minus = room_name
-            break
-    return detected_axis, room_plus, room_minus, None
-
-
-# --- 2. メインのCFDファイル一括処理関数 ---
-def process_cfd_files(stl_files, cfd_files, rho, cp, lv, threshold, calc_latent, hum_col, offset_dist_m):
-    # STLメッシュの読み込み（エラー文を返す既存の関数を想定）
-    meshes, logs = load_stl_meshes(stl_files)
-    if not meshes:
-        st.error("有効な3Dメッシュ(STL)が読み込めませんでした。")
-        return
-
-    # 結果を格納するリスト
-    summary_data = []
-
-    for uploaded_file in cfd_files:
-        file_name = os.path.splitext(uploaded_file.name)[0]
-        try:
+            # 本データの読み込み
             uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, skiprows=2, encoding='cp932')
             
-            # 💡 UIから指定されたオフセット距離（メートル換算後）を渡す
-            axis, r_plus, r_minus, err = detect_rooms_from_coords(df, meshes, offset_dist=offset_dist_m)
-            if err: continue
+            # 座標列の抽出
+            x_col = [c for c in df.columns if 'X[m]' in str(c) or c == 'X']
+            y_col = [c for c in df.columns if 'Y[m]' in str(c) or c == 'Y']
+            z_col = [c for c in df.columns if 'Z[m]' in str(c) or c == 'Z']
 
-            # --- [既存の風量・熱量・温度の計算処理] ---
-            # ※お手元のロジックで計算された数値を想定しています
-            plus_flow = 150.0   # 例: ＋方向風量 [m3/h]
-            plus_heat = 450.0   # 例: ＋方向熱量 [W]
-            minus_flow = 20.0   # 例: ー方向風量 [m3/h]
-            minus_heat = 60.0   # 例: ー方向熱量 [W]
-            avg_temp = 24.5     # 例: 平均温度 [℃]
-            # ----------------------------------------
+            if not (x_col and y_col and z_col):
+                logs.append(f"⚠️ {file_name}: 座標列(X[m], Y[m], Z[m])が見つかりません。")
+                continue
 
-            # テーブルに必要なデータを格納
-            summary_data.append({
-                "開口部名": file_name,
-                "判定軸": axis.upper(),
-                "接する部屋(+)": r_plus,
-                "接する部屋(-)": r_minus,
-                "平均温度 [℃]": round(avg_temp, 1),
-                "風量(+) [m³/h]": round(plus_flow, 1),
-                "熱量(+) [W]": round(plus_heat, 1),
-                "風量(-) [m³/h]": round(minus_flow, 1),
-                "熱量(-) [W]": round(minus_heat, 1)
-            })
+            # 数値変換と欠損値削除
+            flow_col, temp_col = '流量[m3/h]', 'スカラー量[℃]'
+            df[flow_col] = pd.to_numeric(df[flow_col], errors='coerce')
+            df[temp_col] = pd.to_numeric(df[temp_col], errors='coerce')
+            df[x_col[0]] = pd.to_numeric(df[x_col[0]], errors='coerce')
+            df[y_col[0]] = pd.to_numeric(df[y_col[0]], errors='coerce')
+            df[z_col[0]] = pd.to_numeric(df[z_col[0]], errors='coerce')
+            df.dropna(subset=[flow_col, temp_col, x_col[0], y_col[0], z_col[0]], inplace=True)
+
         except Exception as e:
-            st.warning(f"{file_name} の処理中にエラーが発生しました: {e}")
+            logs.append(f"❌ CSV読み込みエラー: {file_name} ({e})")
+            continue
 
-    # 結果をデータフレーム化して画面に出力
-    if summary_data:
-        df_result = pd.DataFrame(summary_data)
-        st.markdown("### 📊 開口部熱バランス 解析結果一覧")
-        st.dataframe(df_result, use_container_width=True)
+        # --- (B) 中心点・法線の計算とSTLによる部屋判定 ---
+        try:
+            # 1. 開口部の中心点を計算
+            center_pt = np.array([
+                df[x_col[0]].mean(),
+                df[y_col[0]].mean(),
+                df[z_col[0]].mean()
+            ])
+
+            # 2. 軸から法線ベクトルを設定
+            normal_vec = np.array([0.0, 0.0, 0.0])
+            if detected_axis == 'x':   normal_vec = np.array([1.0, 0.0, 0.0])
+            elif detected_axis == 'y': normal_vec = np.array([0.0, 1.0, 0.0])
+            elif detected_axis == 'z': normal_vec = np.array([0.0, 0.0, 1.0])
+
+            # 3. 法線方向に少しずらした判定点を2つ作成
+            probe_plus = center_pt + (normal_vec * offset_dist)
+            probe_minus = center_pt - (normal_vec * offset_dist)
+
+            # 4. どの部屋のメッシュ（立体）に点が含まれるか判定
+            found_plus_room = "外部(未特定)"
+            found_minus_room = "外部(未特定)"
+
+            for room_name, mesh in room_meshes.items():
+                # contains_pointsは[[x,y,z]]形式の配列を受け取り、[True/False]の配列を返す
+                if mesh.contains_points([probe_plus])[0]:
+                    found_plus_room = room_name
+                if mesh.contains_points([probe_minus])[0]:
+                    found_minus_room = room_name
+
+            # 両方とも外部になってしまった場合は警告ログを出してスキップ
+            if found_plus_room == "外部(未特定)" and found_minus_room == "外部(未特定)":
+                logs.append(f"⚠️ スキップ: '{file_name}' - 判定点がどの部屋のSTL内にも存在しませんでした。(offset要調整)")
+                continue
+
+        except Exception as e:
+            logs.append(f"❌ 空間位置判定エラー: {file_name} ({e})")
+            continue
+
+        # --- (C) 熱量・風量の集計計算 ---
+        try:
+            # 熱計算
+            df['heat_kjh'] = df[flow_col] * rho * cp * df[temp_col]
+            net_heat_watt = df['heat_kjh'].sum() * 1000 / 3600
+            
+            # 流量計算
+            gross_positive_flow = df[df[flow_col] > 0][flow_col].sum()
+            gross_negative_flow = df[df[flow_col] < 0][flow_col].sum()
+
+            opening_results_list.append({
+                '開口部': file_key,
+                '方向': detected_axis,
+                'Plus_Room': found_plus_room,
+                'Minus_Room': found_minus_room,
+                '総プラス流量[m3/h]': gross_positive_flow,
+                '総マイナス流量[m3/h]': gross_negative_flow,
+                '移動熱量[W]': net_heat_watt
+            })
+            logs.append(f"✅ 計算成功: {file_name} [{found_plus_room} ⇄ {found_minus_room}]")
+
+        except Exception as e:
+            logs.append(f"❌ 計算エラー: {file_name} ({e})")
+
+    # 結果をDataFrame化
+    if not opening_results_list:
+        return None, None, None, logs
+    
+    results_df = pd.DataFrame(opening_results_list)
+
+    # --- 集計処理 ---
+    # 1. 熱収支集計
+    heat_movements = []
+    df_heat_pos = results_df[results_df['移動熱量[W]'] > 0]
+    heat_movements.append(pd.DataFrame({'室名': df_heat_pos['Minus_Room'], '方向': '流出', '熱量[W]': df_heat_pos['移動熱量[W]']}))
+    heat_movements.append(pd.DataFrame({'室名': df_heat_pos['Plus_Room'], '方向': '流入', '熱量[W]': df_heat_pos['移動熱量[W]']}))
+    
+    df_heat_neg = results_df[results_df['移動熱量[W]'] < 0]
+    heat_movements.append(pd.DataFrame({'室名': df_heat_neg['Plus_Room'], '方向': '流出', '熱量[W]': df_heat_neg['移動熱量[W]'].abs()}))
+    heat_movements.append(pd.DataFrame({'室名': df_heat_neg['Minus_Room'], '方向': '流入', '熱量[W]': df_heat_neg['移動熱量[W]'].abs()}))
+    
+    # 外部(未特定)を除外して集計
+    all_heat_movements = pd.concat(heat_movements)
+    all_heat_movements = all_heat_movements[all_heat_movements['室名'] != "外部(未特定)"]
+    
+    heat_df = all_heat_movements.groupby(['室名', '方向'])['熱量[W]'].sum().unstack(fill_value=0)
+    room_heat_summary_df = pd.DataFrame({
+        '総流出熱量[W]': heat_df.get('流出', 0),
+        '総流入熱量[W]': heat_df.get('流入', 0),
+        '処理熱量[W]': heat_df.get('流出', 0) - heat_df.get('流入', 0)
+    }).reset_index()
+
+    # 2. 風量収支集計
+    flow_movements = []
+    flow_movements.append(pd.DataFrame({'室名': results_df['Minus_Room'], '方向': '流出', '流量[m3/h]': results_df['総プラス流量[m3/h]']}))
+    flow_movements.append(pd.DataFrame({'室名': results_df['Plus_Room'], '方向': '流入', '流量[m3/h]': results_df['総プラス流量[m3/h]']}))
+    flow_movements.append(pd.DataFrame({'室名': results_df['Plus_Room'], '方向': '流出', '流量[m3/h]': results_df['総マイナス流量[m3/h]'].abs()}))
+    flow_movements.append(pd.DataFrame({'室名': results_df['Minus_Room'], '方向': '流入', '流量[m3/h]': results_df['総マイナス流量[m3/h]'].abs()}))
+
+    all_flow_movements = pd.concat(flow_movements)
+    all_flow_movements = all_flow_movements[all_flow_movements['室名'] != "外部(未特定)"]
+
+    flow_df = all_flow_movements.groupby(['室名', '方向'])['流量[m3/h]'].sum().unstack(fill_value=0)
+    room_flow_summary_df = pd.DataFrame({
+        '総流出流量[m3/h]': flow_df.get('流出', 0),
+        '総流入流量[m3/h]': flow_df.get('流入', 0),
+        '風量収支[m3/h]': flow_df.get('流出', 0) - flow_df.get('流入', 0)
+    }).reset_index()
+
+    return results_df, room_heat_summary_df, room_flow_summary_df, logs
+
+def create_heat_chart(room_heat_summary_df, fig_width, fig_height, font_size, y_max, custom_colors, show_legend, category_map, mode):
+    if "暖房" in mode:
+        label_passive = "各室熱損失"
+        label_active = "投入熱量"
+        passive = room_heat_summary_df[room_heat_summary_df['処理熱量[W]'] < 0].set_index('室名')['処理熱量[W]'].abs()
+        active = room_heat_summary_df[room_heat_summary_df['処理熱量[W]'] > 0].set_index('室名')['処理熱量[W]']
+    else: 
+        label_passive = "各室負荷"
+        label_active = "処理熱量"
+        passive = room_heat_summary_df[room_heat_summary_df['処理熱量[W]'] > 0].set_index('室名')['処理熱量[W]']
+        active = room_heat_summary_df[room_heat_summary_df['処理熱量[W]'] < 0].set_index('室名')['処理熱量[W]'].abs()
         
-        # CSVダウンロードボタンもついでに配置
-        csv = df_result.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 解析結果をCSVでダウンロード", csv, "heat_balance_result.csv", "text/csv")
+    plot_df_base = pd.DataFrame({label_passive: passive , label_active: active}).T.fillna(0)
+
+    desired_order = []
+    for rooms in category_map.values():
+        desired_order.extend(rooms)
+    
+    current_columns = plot_df_base.columns.tolist()
+    ordered_columns = [col for col in desired_order if col in current_columns]
+    remaining_columns = [col for col in current_columns if col not in desired_order]
+    final_column_order = ordered_columns + remaining_columns
+    
+    plot_df = plot_df_base[final_column_order]
+    
+    colors = []
+    default_color = '#AAAAAA'
+    for room in final_column_order:
+        colors.append(custom_colors.get(room, default_color))
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    plot_df.plot(kind='bar', stacked=True, ax=ax, color=colors, width=0.8, legend=False)
+
+    ax.set_axisbelow(True)
+    ax.grid(axis='y', linestyle='--', alpha=0.7, color='#cccccc')
+    ax.grid(axis='x', visible=False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    
+    ax.tick_params(axis='y', length=0, labelsize=font_size)
+    ax.tick_params(axis='x', length=0)
+    plt.xticks(rotation=0, fontsize=font_size)
+    plt.ylabel('処理熱量[W]', fontsize=font_size)
+    
+    if y_max > 0:
+        ax.set_ylim(0, y_max)
+
+    plt.axhline(0, color='black', linewidth=0.8)
+
+    for i, container in enumerate(ax.containers):
+        labels = [f"{v:,.0f}" if v > 0 else '' for v in container.datavalues]
+        ax.bar_label(container, labels=labels, label_type='center', color='black', fontsize=font_size*0.8, fontweight='bold')
+
+    if show_legend:
+        handles, labels_legend = ax.get_legend_handles_labels()
+        new_handles = []
+        new_labels = []
+        dummy_handle = mpatches.Patch(visible=False)
+
+        for category_name, rooms_in_category in reversed(category_map.items()):
+            category_handles_labels = []
+            for room_name in reversed(rooms_in_category):
+                if room_name in labels_legend:
+                    index = labels_legend.index(room_name)
+                    category_handles_labels.append((handles[index], f"  {room_name}"))
+            
+            if category_handles_labels:
+                if category_name:
+                    new_handles.append(dummy_handle)
+                    new_labels.append(f"--- {category_name} ---")
+                for handle, label in category_handles_labels:
+                    new_handles.append(handle)
+                    new_labels.append(label)
+
+        remaining_items = [(handles[i], f"  {labels_legend[i]}") for i, label in enumerate(labels_legend) if label not in desired_order]
+        if remaining_items:
+            new_handles.append(dummy_handle)
+            new_labels.append("▼ 未分類")
+            for handle, label in remaining_items:
+                new_handles.append(handle)
+                new_labels.append(label)
+
+        ax.legend(handles=new_handles, labels=new_labels, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=font_size*0.9)
+
+    total_pos = passive.sum()
+    total_neg = active.sum()
+    
+    return fig, total_pos, total_neg
+
+# ==========================================
+# 2. アプリケーション UI
+# ==========================================
+
+st.set_page_config(page_title="CFD 熱量分析ツール (STL自動判定版)", layout="wide")
+
+st.title("CFD 熱量分配 & 風量バランス分析 (STL自動判定版)")
+st.markdown("部屋のSTLデータを用いて、開口部CSVの接続部屋(Plus/Minus)を空間座標から自動特定します。")
+
+if 'uploader_key' not in st.session_state:
+    st.session_state['uploader_key'] = 0
+        
+with st.sidebar:
+    st.header("1. 解析設定")
+    mode = st.radio("モード", ["冷房", "暖房"])
+    st.divider()
+    
+    st.header("2. 定数設定")
+    rho = st.number_input("空気密度 ρ [kg/m3]", value=1.20)
+    cp = st.number_input("比熱 Cp [J/g・K]", value=1.006, format="%.3f")
+    threshold = st.number_input("風量収支許容誤差 [m3/h]", value=1.0)
+    # 判定点をずらす距離を調整可能に
+    offset_dist = st.number_input("STL判定のオフセット距離 [m]", value=0.05, step=0.01, format="%.2f", help="開口中心から法線方向にどれだけ離して部屋判定を行うか。壁の厚みより大きく、部屋の奥行きより小さく設定します。")
+    st.divider()
+    
+    st.header("3. 分析ファイル")
+    st.info("部屋ボリュームのSTLファイルをすべて選択（複数可）")
+    stl_files = st.file_uploader("部屋のSTLデータ (複数選択)", type="stl", accept_multiple_files=True)
+    st.markdown("---")
+
+    st.info("FlowDesignerで書き出した開口部のCSVをすべて選択（複数可）")
+    cfd_files = st.file_uploader(
+        "CFD解析結果 (複数選択)",
+        type="csv",
+        accept_multiple_files=True,
+        key = f"cfd_uploader_{st.session_state['uploader_key']}"
+    )
+
+    def reset_files():
+        st.session_state['uploader_key'] += 1
+        st.session_state['analyzed'] = False
+
+    if st.button("リセット"):
+        reset_files()
+        st.rerun()
+
+
+# --- メイン処理 ---
+
+if 'analyzed' not in st.session_state:
+    st.session_state['analyzed'] = False
+    st.session_state['results_df'] = None
+    st.session_state['room_heat_df'] = None
+    st.session_state['room_flow_df'] = None
+    st.session_state['logs'] = []
+
+if st.button("解析実行", type="primary"):
+    if not stl_files or not cfd_files:
+        st.warning("部屋のSTLデータとCFD解析結果の両方をアップロードしてください。")
     else:
-        st.info("処理対象の開口部データがありません。")
+        with st.spinner("STL空間マッピング & 熱量計算中..."):
+            results_df, room_heat_df, room_flow_df, logs = process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_dist)
+            
+            st.session_state['logs'] = logs
+            if results_df is not None:
+                st.session_state['results_df'] = results_df
+                st.session_state['room_heat_df'] = room_heat_df
+                st.session_state['room_flow_df'] = room_flow_df
+                st.session_state['analyzed'] = True
+                st.success("解析完了")
+            else:
+                st.error("有効なデータが作成されませんでした。ログを確認してください。")
 
+# ログ表示コンテナ（常時確認できるようにボタンの下に配置）
+if st.session_state['logs']:
+    with st.expander("実行ログ・エラー・警告", expanded=not st.session_state['analyzed']):
+        for log in st.session_state['logs']:
+            if "❌" in log: st.error(log)
+            elif "⚠️" in log: st.warning(log)
+            elif "✅" in log: st.success(log)
+            else: st.info(log)
 
-# --- 3. Streamlit UI 画面構成 ---
-st.title("FlowDesigner × Rhino 熱バランス解析ツール")
+if st.session_state['analyzed']:
+    results_df = st.session_state['results_df']
+    room_heat_df = st.session_state['room_heat_df']
+    room_flow_df = st.session_state['room_flow_df']
 
-# サイドバーにUI設定を集約
-st.sidebar.header("🔧 解析条件設定")
+    tab1, tab2, tab3 = st.tabs(["風量収支チェック", "熱量分配グラフ", "計算詳細"])
 
-# 💡 オフセット距離をミリ単位で変更できるスライダー（初期値50mm）
-offset_mm = st.sidebar.slider(
-    "開口部判定のオフセット距離 (mm)", 
-    min_value=10, 
-    max_value=300, 
-    value=50, 
-    step=10,
-    help="開口部の中心から表裏に何ミリ離れた点で部屋を判定するかを設定します。壁の厚みに応じて調整してください。"
-)
-# メートル単位に変換して計算ロジックに渡す
-offset_m = offset_mm / 1000.0
+    # --- Tab 1: 風量バランス ---
+    with tab1:
+        st.subheader("風量収支チェック")
+        st.caption(f"許容誤差: ±{threshold} m3/h")
+        
+        warning_count = 0
+        for index, row in room_flow_df.iterrows():
+            room = row['室名']
+            balance = row['風量収支[m3/h]']
+            
+            if balance > threshold:
+                st.error(f"⚠️ {room}: 流出過多 (流入不足) +{balance:.2f} m3/h")
+                warning_count += 1
+            elif balance < -threshold:
+                st.error(f"⚠️ {room}: 流入過多 (流出不足) {balance:.2f} m3/h")
+                warning_count += 1
+            else:
+                st.success(f"{room}: OK ({balance:+.2f} m3/h)")
+        
+        if warning_count == 0:
+            st.info("✅ 全室で風量収支が許容値以下")
 
-# (その他の計算パラメータ UI)
-rho = st.sidebar.number_input("空気密度 rho [kg/m3]", value=1.2)
-cp = st.sidebar.number_input("比熱 cp [J/kg·K]", value=1006)
+    # --- Tab 2: グラフ ---
+    with tab2:
+        st.subheader("各室およびエアコンの空調処理熱量")
+        all_rooms = sorted(room_heat_df['室名'].unique())
 
-# ファイルアップローダー
-stl_files = st.file_uploader("1. STLファイルをアップロード (複数可)", accept_multiple_files=True, type=['stl'])
-cfd_files = st.file_uploader("2. 開口部CSVファイルをアップロード (複数可)", accept_multiple_files=True, type=['csv'])
+        with st.expander("グラフをカスタマイズする", expanded=False):
+            st.markdown("#### 凡例グループと並び順")
+            default_categories_list = [
+                ("１階", ["LD", "キッチン", "階段室"]),
+                ("２階", ["2階廊下等", "主寝室", "洋室", "小屋裏"]),
+                ("空調機", ["AC"])
+            ]
 
-if st.button("🔥 熱バランス解析を実行"):
-    if stl_files and cfd_files:
-        with st.spinner("空間判定および熱量計算を実行中..."):
-            process_cfd_files(stl_files, cfd_files, rho, cp, None, None, False, None, offset_m)
-    else:
-        st.error("STLファイルと開口部CSVファイルの両方をアップロードしてください。")
+            num_categories = st.number_input("カテゴリー数", min_value = 1, max_value = 10, value = 3, step = 1)
+            custom_category_map = {}
+            cols_cat = st.columns(3)
+
+            for i in range(num_categories):
+                with cols_cat[i % 3]:
+                    if i < len(default_categories_list):
+                        def_name = default_categories_list[i][0]
+                        def_rooms = [r for r in default_categories_list[i][1] if r in all_rooms]
+                    else:
+                        def_name  = f"グループ{i+1}"
+                        def_rooms = []
+
+                    cat_name = st.text_input(f"カテゴリ名{i+1}", value=def_name, key=f"cat_name_{i}")
+                    selected_rooms = st.multiselect(f"{cat_name} の部屋", options=all_rooms, default=def_rooms, key=f"cat_rooms_{i}")
+                    if cat_name and selected_rooms:
+                        custom_category_map[cat_name] = selected_rooms
+
+            st.divider()
+            st.markdown("#### グラフ体裁")
+            col_ui1, col_ui2, col_ui3 = st.columns(3)
+            
+            with col_ui1:
+                st.markdown("**サイズ設定**")
+                fig_w = st.number_input("横幅 (inch)", value=6.0, step=0.5)
+                fig_h = st.number_input("高さ (inch)", value=10.0, step=0.5)
+            
+            with col_ui2:
+                st.markdown("**表示設定**")
+                font_size = st.slider("文字サイズ", 8, 40, 14)
+                y_max = st.number_input("Y軸の最大値 (0で自動)", value=0, step=100)
+                show_legend = st.checkbox("凡例を表示する", value=True)
+
+            with col_ui3:
+                st.markdown("**色の設定**")
+                default_colors = {
+                    "LDK": "#FF7F50", "1階": "#FF7F50", "2階": "#0000FF", "廊下": "#9370DB",
+                    "R1": "#6495ED", "R2": "#FFA500", "R3": "#32CD32", "床下": "#D3D3D3",
+                    "AC": "#87CEEB", "洗面室": "#40E0D0",
+                    "和室": "#BDB76B", "SR": "#FFFF00","LD": "#7DA055", "小屋裏": "#EB6464",
+                    "2階廊下等": "#7DC6BE", "キッチン": "#E2E878","主寝室": "#9BCE8A","洋室": "#60FF78",
+                    "階段室": "#F39C60"
+                }
+                custom_colors = {}
+                if st.checkbox("色を個別に変更する"):
+                    for room in all_rooms:
+                        initial = default_colors.get(room, "#AAAAAA")
+                        custom_colors[room] = st.color_picker(f"{room}", value=initial, key=f"color_{room}")
+                else:
+                    custom_colors = default_colors
+
+        try:
+            fig, total_passive, total_active = create_heat_chart(
+                room_heat_df, fig_w, fig_h, font_size, y_max, custom_colors, show_legend, custom_category_map, mode
+            )
+            st.pyplot(fig)
+            
+            col1, col2 = st.columns(2)
+            label_left = "各室熱損失合計" if "暖房" in mode else "各室熱負荷合計"
+            label_right = "投入熱量" if "暖房" in mode else "処理熱量"
+            col1.metric(label_left, f"{total_passive:,.1f} W")
+            col2.metric(label_right, f"{total_active:,.1f} W")
+            
+            img = io.BytesIO()
+            fig.savefig(img, format='svg', bbox_inches='tight')
+            st.download_button("グラフをSVGで保存", img, "heat_balance.svg", "image/svg+xml")
+            
+        except Exception as e:
+            st.error(f"グラフ作成エラー: {e}")
+
+    # --- Tab 3: 計算詳細 ---
+    with tab3:
+        st.markdown("### 📥 データダウンロード")
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
+        col_dl1.download_button("表1 (開口部風量・移動熱量)", results_df.to_csv(index=False).encode('shift_jis'), "results_raw.csv")
+        col_dl2.download_button("表2 (処理熱量)", room_heat_df.to_csv(index=False).encode('shift_jis'), "results_heat.csv")
+        col_dl3.download_button("表3 (風量収支)", room_flow_df.to_csv(index=False).encode('shift_jis'), "results_flow.csv")
+        st.divider()
+
+        st.markdown("### (表1) 開口部別 風量・移動熱量")
+        st.dataframe(results_df)
+        
+        st.markdown("### (表2) 室別 処理熱量")
+        st.dataframe(room_heat_df)
+        
+        st.markdown("### (表3) 室別 風量収支")
+        st.dataframe(room_flow_df)
