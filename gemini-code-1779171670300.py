@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import itertools
 import matplotlib.pyplot as plt
-import matplotlib.patches mpatches
+import matplotlib.patches as mpatches
 import io
 import matplotlib_fontja
 import numpy as np
