@@ -3,7 +3,35 @@ import pandas as pd
 import numpy as np
 import trimesh
 import os
+import io
 
+# --- 💡 追加：STLファイルを一括で読み込む関数 ---
+def load_stl_meshes(stl_files):
+    """アップロードされた複数のSTLファイルを読み込んで辞書形式にする"""
+    meshes = {}
+    logs = []
+    for stl_file in stl_files:
+        try:
+            # ファイル名（拡張子なし）を部屋名にする
+            room_name = os.path.splitext(stl_file.name)[0]
+            
+            # Streamlitのアップロードファイルをtrimeshで読み込む
+            stl_file.seek(0)
+            mesh = trimesh.load(io.BytesIO(stl_file.read()), file_type='stl')
+            
+            # 複数のメッシュが混ざっている場合の結合処理
+            if isinstance(mesh, trimesh.Scene):
+                if len(mesh.geometry) > 0:
+                    mesh = trimesh.util.concatenate(list(mesh.geometry.values()))
+                else:
+                    logs.append(f"⚠️ {stl_file.name}: 有効な形状が含まれていません")
+                    continue
+            
+            meshes[room_name] = mesh
+        except Exception as e:
+            logs.append(f"❌ {stl_file.name} の読み込みに失敗: {e}")
+            
+    return meshes, logs
 # --- 1. 空間判定ロジック（L型対応・デバッグなし版） ---
 def detect_rooms_from_coords(df, meshes, offset_dist=0.05):
     """座標から開口部の軸と、隣接する2つの部屋を正確に判定する"""
