@@ -41,10 +41,19 @@ def detect_rooms_from_coords(df, meshes, offset_dist=0.05):
 
     room_plus = "外気(未定義)"
     room_minus = "外気(未定義)"
-    for room_name, mesh in meshes.items():
-        if is_inside(mesh, pt_plus): room_plus = room_name
-        if is_inside(mesh, pt_minus): room_minus = room_name
+    sorted_meshes = sorted(meshes.items(), key=lambda item: item[1].bounding_box.volume)
 
+    # Plus側の判定（小さい順に調べて、見つかったらそこでストップ）
+    for room_name, mesh in sorted_meshes:
+        if is_inside(mesh, pt_plus): 
+            room_plus = room_name
+            break  # 一番小さい空間（例:エアコン）に入っていたら即確定！
+
+    # Minus側の判定
+    for room_name, mesh in sorted_meshes:
+        if is_inside(mesh, pt_minus): 
+            room_minus = room_name
+            break
     return detected_axis, room_plus, room_minus, None
 
 
