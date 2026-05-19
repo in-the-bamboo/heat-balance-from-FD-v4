@@ -115,9 +115,9 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
 
             for room_name, mesh in room_meshes.items():
                 # contains_pointsは[[x,y,z]]形式の配列を受け取り、[True/False]の配列を返す
-                if mesh.contains_points([probe_plus])[0]:
+                if mesh.contains([probe_plus])[0]:
                     found_plus_room = room_name
-                if mesh.contains_points([probe_minus])[0]:
+                if mesh.contains([probe_minus])[0]:
                     found_minus_room = room_name
 
             # 両方とも外部になってしまった場合は警告ログを出してスキップ
