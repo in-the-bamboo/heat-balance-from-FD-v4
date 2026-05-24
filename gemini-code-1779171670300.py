@@ -167,7 +167,7 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             else:
                 mean_temp = df[temp_col].mean()
 
-            simplemean_temp = df[flow_col].mean()
+            simplemean_temp = df[temp_col].mean()
             df['heat_kjh'] = df[flow_col] * rho * cp * df[temp_col]
             net_heat_watt = df['heat_kjh'].sum() * 1000 / 3600
             
