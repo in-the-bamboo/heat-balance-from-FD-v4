@@ -131,8 +131,8 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
                     except:
                         vol = mesh.bounding_box.volume
 
-                    if mesh.contains_points([probe_plus])[0]: plus_candidates.append((room_name, vol))
-                    if mesh.contains_points([probe_minus])[0]: minus_candidates.append((room_name, vol))
+                    if mesh.contains([probe_plus])[0]: plus_candidates.append((room_name, vol))
+                    if mesh.contains([probe_minus])[0]: minus_candidates.append((room_name, vol))
 
                 found_plus_room = min(plus_candidates, key=lambda x: x[1])[0] if plus_candidates else "外部(未特定)"
                 found_minus_room = min(minus_candidates, key=lambda x: x[1])[0] if minus_candidates else "外部(未特定)"
