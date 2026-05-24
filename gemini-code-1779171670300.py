@@ -161,6 +161,13 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
         # --- (C) 熱量・風量の集計計算 ---
         try:
             # 熱計算
+            flow_abs = df[flow_col].abs()
+            if flow_abs.sum() > 0:
+                mean_temp = (df[temp_col] * flow_abs).sum() / flow_abs.sum()
+            else:
+                mean_temp = df[temp_col].mean()
+
+            simplemean_temp = df[flow_col].mean()
             df['heat_kjh'] = df[flow_col] * rho * cp * df[temp_col]
             net_heat_watt = df['heat_kjh'].sum() * 1000 / 3600
             
@@ -173,6 +180,8 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
                 '方向': detected_axis,
                 'Plus_Room': found_plus_room,
                 'Minus_Room': found_minus_room,
+                '平均温度[℃]': simplemean_temp
+                '平均温度[℃](風量加重平均)': mean_temp
                 '総プラス流量[m3/h]': gross_positive_flow,
                 '総マイナス流量[m3/h]': gross_negative_flow,
                 '移動熱量[W]': net_heat_watt
