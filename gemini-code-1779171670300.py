@@ -36,17 +36,36 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             logs.append(f"❌ STL読み込み失敗: {stl_file.name} ({e})")
 
     opening_results_list = []
+    files_to_process = []
+    
+    for f in cfd_files:
+        files_to_process.append({'file': f, 'type': 'normal'})
+    
+    # 換気CSVがアップロードされていればリストに合流させる
+    if vent_settings.get('in_file') is not None:
+        files_to_process.append({
+            'file': vent_settings['in_file'], 
+            'type': 'vent_in', 
+            'target_room': vent_settings['in_room']
+        })
+    if vent_settings.get('out_file') is not None:
+        files_to_process.append({
+            'file': vent_settings['out_file'], 
+            'type': 'vent_out', 
+            'target_room': vent_settings['out_room']
+        })
+    
 
     # --- 2. 各CFDファイルをループ処理 ---
-    total_files = len(cfd_files)
+    total_files = len(files_to_process)
     progress_bar = st.progress(0)
 
-    for i, uploaded_file in enumerate(cfd_files):
+    for i, file_info in enumerate(files_to_process):
         progress_bar.progress((i + 1) / total_files)
-        
+
+        uploaded_file = file_info['file']
         file_name = uploaded_file.name
         file_key = os.path.splitext(file_name)[0]
-
         detected_axis = None
 
         # --- (A) 全データと軸情報の読み込み ---
@@ -91,54 +110,52 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             continue
 
         # --- (B) 中心点・法線の計算とSTLによる部屋判定 ---
-        try:
-            # 1. 開口部の中心点を計算
-            center_pt = np.array([
-                df[x_col[0]].mean(),
-                df[y_col[0]].mean(),
-                df[z_col[0]].mean()
-            ])
+if file_info['type'] == 'normal':
+            try:
+                center_pt = np.array([df[x_col[0]].mean(), df[y_col[0]].mean(), df[z_col[0]].mean()])
+                normal_vec = np.array([0.0, 0.0, 0.0])
+                if detected_axis == 'x':   normal_vec = np.array([1.0, 0.0, 0.0])
+                elif detected_axis == 'y': normal_vec = np.array([0.0, 1.0, 0.0])
+                elif detected_axis == 'z': normal_vec = np.array([0.0, 0.0, 1.0])
 
-            # 2. 軸から法線ベクトルを設定
-            normal_vec = np.array([0.0, 0.0, 0.0])
-            if detected_axis == 'x':   normal_vec = np.array([1.0, 0.0, 0.0])
-            elif detected_axis == 'y': normal_vec = np.array([0.0, 1.0, 0.0])
-            elif detected_axis == 'z': normal_vec = np.array([0.0, 0.0, 1.0])
+                probe_plus = center_pt + (normal_vec * offset_dist)
+                probe_minus = center_pt - (normal_vec * offset_dist)
 
-            # 3. 法線方向に少しずらした判定点を2つ作成
-            probe_plus = center_pt + (normal_vec * offset_dist)
-            probe_minus = center_pt - (normal_vec * offset_dist)
+                plus_candidates = []
+                minus_candidates = []
 
-            plus_candidates = []
-            minus_candidates = []
-            
-            for room_name, mesh in room_meshes.items():
-                # 安全にメッシュの体積を取得（万が一閉じられていない場合は外枠の体積で代用）
-                try:
-                    vol = abs(mesh.volume)
-                    if vol < 1e-5:
+                for room_name, mesh in room_meshes.items():
+                    try:
+                        vol = abs(mesh.volume)
+                        if vol < 1e-5: vol = mesh.bounding_box.volume
+                    except:
                         vol = mesh.bounding_box.volume
-                except:
-                    vol = mesh.bounding_box.volume
 
-                # 点が含まれているかチェックし、部屋名と体積をストック
-                if mesh.contains([probe_plus])[0]:
-                    plus_candidates.append((room_name, vol))
-                if mesh.contains([probe_minus])[0]:
-                    minus_candidates.append((room_name, vol))
+                    if mesh.contains_points([probe_plus])[0]: plus_candidates.append((room_name, vol))
+                    if mesh.contains_points([probe_minus])[0]: minus_candidates.append((room_name, vol))
 
-            # ヒットした候補の中から「最も体積(vol)が小さい部屋」を正解とする
-            found_plus_room = min(plus_candidates, key=lambda x: x[1])[0] if plus_candidates else "外部(未特定)"
-            found_minus_room = min(minus_candidates, key=lambda x: x[1])[0] if minus_candidates else "外部(未特定)"
-            # 両方とも外部になってしまった場合は警告ログを出してスキップ
-            if found_plus_room == "外部(未特定)" and found_minus_room == "外部(未特定)":
-                logs.append(f"⚠️ スキップ: '{file_name}' - 判定点がどの部屋のSTL内にも存在しませんでした。(offset要調整)")
+                found_plus_room = min(plus_candidates, key=lambda x: x[1])[0] if plus_candidates else "外部(未特定)"
+                found_minus_room = min(minus_candidates, key=lambda x: x[1])[0] if minus_candidates else "外部(未特定)"
+
+                if found_plus_room == "外部(未特定)" and found_minus_room == "外部(未特定)":
+                    logs.append(f"⚠️ スキップ: '{file_name}' - 判定点がどの部屋のSTL内にも存在しませんでした。")
+                    continue
+
+            except Exception as e:
+                logs.append(f"❌ 空間位置判定エラー: {file_name} ({e})")
                 continue
+        
+        elif file_info['type'] == 'vent_in':
+            # 給気CSV：[外気 ⇄ 指定部屋] に強制固定
+            found_plus_room = file_info['target_room']
+            found_minus_room = "外気"
+            logs.append(f"🔧 換気処理(給気): '{file_name}' を [外気 ⇄ {found_plus_room}] として処理します。")
 
-        except Exception as e:
-            logs.append(f"❌ 空間位置判定エラー: {file_name} ({e})")
-            continue
-
+        elif file_info['type'] == 'vent_out':
+            # 排気CSV：[指定部屋 ⇄ 外気] に強制固定
+            found_plus_room = "外気"
+            found_minus_room = file_info['target_room']
+            logs.append(f"🔧 換気処理(排気): '{file_name}' を [{found_minus_room} ⇄ 外気] として処理します。")
         # --- (C) 熱量・風量の集計計算 ---
         try:
             # 熱計算
@@ -345,8 +362,18 @@ with st.sidebar:
     if st.button("リセット"):
         reset_files()
         st.rerun()
-
-
+    st.divider()
+    
+    st.header("4. 換気・外気CSV設定 (オプション)")
+    st.markdown("空間的に接していない独立した給気・排気のCSVを個別に割り当てます。")
+    
+    st.subheader("垂直給気（外気 → 室内）")
+    in_file = st.file_uploader("給気CSVファイルをアップロード", type="csv", key="vent_in_uploader")
+    in_room = st.text_input("給気先の部屋名（STL名と一致させてください）", value="床下")
+    
+    st.subheader("垂直排気（室内 → 外気）")
+    out_file = st.file_uploader("排気CSVファイルをアップロード", type="csv", key="vent_out_uploader")
+    out_room = st.text_input("排気元の部屋名（STL名と一致させてください）", value="小屋裏")
 # --- メイン処理 ---
 
 if 'analyzed' not in st.session_state:
