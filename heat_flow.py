@@ -167,7 +167,6 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             else:
                 mean_temp = df[temp_col].mean()
 
-            simplemean_temp = df[temp_col].mean()
             df['heat_kjh'] = df[flow_col] * rho * cp * df[temp_col]
             net_heat_watt = df['heat_kjh'].sum() * 1000 / 3600
             
@@ -180,7 +179,6 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
                 '方向': detected_axis,
                 'Plus_Room': found_plus_room,
                 'Minus_Room': found_minus_room,
-                '平均温度[℃]': simplemean_temp,
                 '平均温度[℃](風量加重平均)': mean_temp,
                 '総プラス流量[m3/h]': gross_positive_flow,
                 '総マイナス流量[m3/h]': gross_negative_flow,
@@ -332,10 +330,10 @@ def create_heat_chart(room_heat_summary_df, fig_width, fig_height, font_size, y_
 # 2. アプリケーション UI
 # ==========================================
 
-st.set_page_config(page_title="CFD 熱量分析ツール (STL自動判定版)", layout="wide")
+st.set_page_config(page_title="CFD搬送熱量分析ツール (流出入自動判定版)", layout="wide")
 
-st.title("CFD 熱量分配 & 風量バランス分析 (STL自動判定版)")
-st.markdown("部屋のSTLデータを用いて、開口部CSVの接続部屋(Plus/Minus)を空間座標から自動特定します。")
+st.title("CFD 搬送熱量 & 風量バランス分析 (流出入自動判定版)")
+st.markdown("部屋のSTLデータを用いて、開口部CSVが面する部屋を特定します。")
 
 if 'uploader_key' not in st.session_state:
     st.session_state['uploader_key'] = 0
@@ -348,17 +346,17 @@ with st.sidebar:
     st.header("2. 定数設定")
     rho = st.number_input("空気密度 ρ [kg/m3]", value=1.20)
     cp = st.number_input("比熱 Cp [J/g・K]", value=1.006, format="%.3f")
-    threshold = st.number_input("風量収支許容誤差 [m3/h]", value=1.0)
+    threshold = st.number_input("風量収支許容誤差 [m3/h]", value=1.0, format="%.2f", help="風量収支チェックに用いる値で、部屋に流出入する風量の差がこれより大きくなったとき警告を表示します。")
     # 判定点をずらす距離を調整可能に
-    offset_dist = st.number_input("STL判定のオフセット距離 [m]", value=0.05, step=0.01, format="%.2f", help="開口中心から法線方向にどれだけ離して部屋判定を行うか。壁の厚みより大きく、部屋の奥行きより小さく設定します。")
+    offset_dist = st.number_input("STL判定のオフセット距離 [m]", value=0.05, step=0.01, format="%.2f", help="開口部が面する2部屋の認識に用いています。開口部の中心から表裏2方向の法線方向にこの距離だけ移動した点が、どの部屋の領域に含まれているかを判定します。")
     st.divider()
     
     st.header("3. 分析ファイル")
-    st.info("部屋ボリュームのSTLファイルをすべて選択（複数可）")
+    st.info("部屋ボリュームのSTLファイルをすべてアップロード")
     stl_files = st.file_uploader("部屋のSTLデータ (複数選択)", type="stl", accept_multiple_files=True)
     st.markdown("---")
 
-    st.info("FlowDesignerで書き出した開口部のCSVをすべて選択（複数可）")
+    st.info("FlowDesignerで書き出した開口部のCSVをすべてアップロード")
     cfd_files = st.file_uploader(
         "CFD解析結果 (複数選択)",
         type="csv",
@@ -375,16 +373,16 @@ with st.sidebar:
         st.rerun()
     st.divider()
     
-    st.header("4. 換気・外気CSV設定 (オプション)")
-    st.markdown("空間的に接していない独立した給気・排気のCSVを個別に割り当てます。")
+    st.header("4. 換気個別設定 (オプション)")
+    st.markdown("給排気口が直接外気（外壁）に接していない場合、給気・排気のCSVを個別に指定します。")
     
-    st.subheader("垂直給気（外気 → 室内）")
-    in_file = st.file_uploader("給気CSVファイルをアップロード", type="csv", key="vent_in_uploader")
-    in_room = st.text_input("給気先の部屋名（STL名と一致させてください）", value="床下")
+    st.subheader("給気（外気 → 室内）")
+    in_file = st.file_uploader("給気口CSVファイルをアップロード", type="csv", key="vent_in_uploader")
+    in_room = st.text_input("SAが流入する部屋名（STL名と一致させてください）", value="床下")
     
     st.subheader("垂直排気（室内 → 外気）")
-    out_file = st.file_uploader("排気CSVファイルをアップロード", type="csv", key="vent_out_uploader")
-    out_room = st.text_input("排気元の部屋名（STL名と一致させてください）", value="小屋裏")
+    out_file = st.file_uploader("排気口CSVファイルをアップロード", type="csv", key="vent_out_uploader")
+    out_room = st.text_input("EAが流出する部屋名（STL名と一致させてください）", value="ホール")
 # --- メイン処理 ---
 
 if 'analyzed' not in st.session_state:
@@ -398,7 +396,7 @@ if st.button("解析実行", type="primary"):
     if not cfd_files and not in_file and not out_file:
         st.warning("CFD解析結果のCSVをアップロードしてください。")
     else:
-        with st.spinner("STL空間マッピング & 熱量計算中..."):
+        with st.spinner("計算中..."):
             # 1. 換気用の設定を辞書にまとめる
             vent_settings = {
                 'in_file': in_file,
@@ -510,12 +508,14 @@ if st.session_state['analyzed']:
             with col_ui3:
                 st.markdown("**色の設定**")
                 default_colors = {
-                    "LDK": "#FF7F50", "1階": "#FF7F50", "2階": "#0000FF", "廊下": "#9370DB",
-                    "R1": "#6495ED", "R2": "#FFA500", "R3": "#32CD32", "床下": "#D3D3D3",
-                    "AC": "#87CEEB", "洗面室": "#40E0D0",
-                    "和室": "#BDB76B", "SR": "#FFFF00","LD": "#7DA055", "小屋裏": "#EB6464",
-                    "2階廊下等": "#7DC6BE", "キッチン": "#E2E878","主寝室": "#9BCE8A","洋室": "#60FF78",
-                    "階段室": "#F39C60"
+                    "LDK": "#FF6F6F", "1階": "#FF7F50", "2階": "#0000FF", "廊下": "#9370DB",
+                    "洋室1": "#6495ED", "洋室2": "#FFA500", "R3": "#32CD32", "床下": "#D3D3D3",
+                    "AC": "#87CEEB", "AC1F": "#87CEEB","AC2F": "#1D8EFF", "洗面室": "#40E0D0",
+                    "和室": "#BDB76B", "SR": "#FFFF00","LD": "#7DA055", "小屋裏": "#FFD330",
+                    "2階廊下等": "#7DC6BE", "キッチン": "#E2E878","主寝室": "#9BCE8A",
+                    "階段": "#F39C60", "ホール": "#7DC6BE","吹抜": "#D16500",
+                    "玄関": "#82B000", "階間": "#5E5E5E",
+                    "SCL": "#425102", "WCL": "#6E833C",
                 }
                 custom_colors = {}
                 if st.checkbox("色を個別に変更する"):
