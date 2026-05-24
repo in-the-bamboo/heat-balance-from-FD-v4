@@ -340,30 +340,34 @@ def create_heat_chart(room_heat_summary_df, fig_width, fig_height, font_size, y_
     return fig, total_pos, total_neg
 
 # ▼▼▼ 追加: 3Dネットワークビューアを描画する関数 ▼▼▼
+# ▼▼▼ 差し替える関数 ▼▼▼
 def create_3d_viewer(stl_dict, df_openings):
     fig = go.Figure()
 
-    # (1) 部屋のワイヤーフレームを描画
+    # (1) 部屋の形状を「超軽量なハコ（バウンディングボックス）」で描画する
     for room_name, mesh in stl_dict.items():
         try:
-            # 輪郭線（エッジ）を取得して描画
-            edges = mesh.outline()
-            points = edges.vertices[edges.entities[0].points]
-            fig.add_trace(go.Scatter3d(
-                x=points[:, 0], y=points[:, 1], z=points[:, 2],
-                mode='lines',
-                line=dict(color='lightgray', width=2),
-                opacity=0.3,
-                name=f"{room_name}",
-                legendgroup="rooms"
-            ))
-        except:
-            # アウトラインが取れない複雑なメッシュの場合は面で薄く描画
+            # 部屋の最大・最小座標を取得して直方体を作る
+            bbox = mesh.bounding_box.bounds 
+            min_pt, max_pt = bbox[0], bbox[1]
+            
+            # 直方体の8つの頂点
+            x = [min_pt[0], max_pt[0], max_pt[0], min_pt[0], min_pt[0], max_pt[0], max_pt[0], min_pt[0]]
+            y = [min_pt[1], min_pt[1], max_pt[1], max_pt[1], min_pt[1], min_pt[1], max_pt[1], max_pt[1]]
+            z = [min_pt[2], min_pt[2], min_pt[2], min_pt[2], max_pt[2], max_pt[2], max_pt[2], max_pt[2]]
+            
+            # 面を張るためのインデックス（12枚の三角形）
+            i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
+            j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
+            k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6]
+
             fig.add_trace(go.Mesh3d(
-                x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
-                i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
-                opacity=0.1, color='gray', name=f"{room_name}", legendgroup="rooms"
+                x=x, y=y, z=z, i=i, j=j, k=k,
+                opacity=0.1, color='gray', name=f"{room_name}", legendgroup="rooms",
+                hoverinfo="name"
             ))
+        except Exception as e:
+            continue # 万が一エラーが出てもスキップして次へ
 
     # (2) 開口部の気流・熱ネットワーク（矢印線）を描画
     for index, row in df_openings.iterrows():
@@ -384,7 +388,6 @@ def create_3d_viewer(stl_dict, df_openings):
         else:
             direction = -np.array([row['u'], row['v'], row['w']])
             disp_flow = abs(net_flow)
-            # 矢印の向きが逆転するため、文字表記上の部屋も入れ替える
             f_room, t_room = t_room, f_room
 
         heat = row['移動熱量[W]']
@@ -393,13 +396,12 @@ def create_3d_viewer(stl_dict, df_openings):
         if disp_flow < 0.1:
             continue
 
-        # 太さと色（適当なスケーリング）
+        # 太さ
         width_val = max(1, min(10, disp_flow / 20))
-        color_val = heat
 
-        # 矢印線の追加
+        # 矢印線の追加 (Plotlyが安定するようテキスト周りも少し微調整しました)
         fig.add_trace(go.Scatter3d(
-            x=[origin[0], origin[0] + direction[0] * 1000], # 1000mm(1m) 矢印を伸ばす
+            x=[origin[0], origin[0] + direction[0] * 1000], # 1000mm 矢印を伸ばす
             y=[origin[1], origin[1] + direction[1] * 1000],
             z=[origin[2], origin[2] + direction[2] * 1000],
             mode='lines+text',
@@ -407,7 +409,7 @@ def create_3d_viewer(stl_dict, df_openings):
                 color='red' if heat > 0 else 'blue', 
                 width=width_val
             ),
-            text=[None, f"{disp_flow:.0f}m3/h\n({f_room}➔{t_room})"],
+            text=["", f"{disp_flow:.0f}m3/h<br>({f_room}➔{t_room})"], 
             textposition="top center",
             name=f"{name}"
         ))
@@ -422,6 +424,7 @@ def create_3d_viewer(stl_dict, df_openings):
     )
 
     return fig
+# ▲▲▲ 差し替えここまで ▲▲▲
 # ▲▲▲ 追加ここまで ▲▲▲
 # ==========================================
 # 2. アプリケーション UI
