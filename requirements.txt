@@ -5,3 +5,4 @@ matplotlib
 matplotlib-fontja
 trimesh
 rtree
+plotly.graph_objects
