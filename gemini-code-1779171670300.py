@@ -384,11 +384,23 @@ if 'analyzed' not in st.session_state:
     st.session_state['logs'] = []
 
 if st.button("解析実行", type="primary"):
-    if not stl_files or not cfd_files:
-        st.warning("部屋のSTLデータとCFD解析結果の両方をアップロードしてください。")
+    if not cfd_files and not in_file and not out_file:
+        st.warning("CFD解析結果のCSVをアップロードしてください。")
     else:
         with st.spinner("STL空間マッピング & 熱量計算中..."):
-            results_df, room_heat_df, room_flow_df, logs = process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_dist)
+            # 1. 換気用の設定を辞書にまとめる
+            vent_settings = {
+                'in_file': in_file,
+                'in_room': in_room,
+                'out_file': out_file,
+                'out_room': out_room
+            }
+            
+            # 2. 関数の引数の最後に「vent_settings」を追加して呼び出す
+            # (※ stl_files はローカル自動読み込みにしたため不要になっています)
+            results_df, room_heat_df, room_flow_df, logs = process_cfd_files_with_stl(
+                cfd_files, rho, cp, threshold, offset_dist, vent_settings
+            )
             
             st.session_state['logs'] = logs
             if results_df is not None:
