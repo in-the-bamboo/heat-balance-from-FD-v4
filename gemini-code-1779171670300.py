@@ -13,7 +13,7 @@ import trimesh  # 3Dメッシュの内外判定用ライブラリ
 # 1. 関数定義
 # ==========================================
 
-def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_dist):
+def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_dist, vent_settings):
     """
     STLファイル（部屋の立体データ）を使って、開口部CSVがどの部屋を繋いでいるかを自動判定する
     """
@@ -399,7 +399,7 @@ if st.button("解析実行", type="primary"):
             # 2. 関数の引数の最後に「vent_settings」を追加して呼び出す
             # (※ stl_files はローカル自動読み込みにしたため不要になっています)
             results_df, room_heat_df, room_flow_df, logs = process_cfd_files_with_stl(
-                cfd_files, rho, cp, threshold, offset_dist, vent_settings
+                stl_files, cfd_files, rho, cp, threshold, offset_dist, vent_settings
             )
             
             st.session_state['logs'] = logs
