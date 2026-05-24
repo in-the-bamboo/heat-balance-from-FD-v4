@@ -181,7 +181,7 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
                 'Plus_Room': found_plus_room,
                 'Minus_Room': found_minus_room,
                 '平均温度[℃]': simplemean_temp
-                '平均温度[℃](風量加重平均)': mean_temp
+                '平均温度[℃](風量加重平均)': mean_temp,
                 '総プラス流量[m3/h]': gross_positive_flow,
                 '総マイナス流量[m3/h]': gross_negative_flow,
                 '移動熱量[W]': net_heat_watt
