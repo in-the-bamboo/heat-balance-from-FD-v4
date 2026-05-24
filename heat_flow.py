@@ -467,17 +467,18 @@ if st.session_state['analyzed']:
         with st.expander("グラフをカスタマイズする", expanded=False):
             st.markdown("#### 凡例グループと並び順")
             default_categories_list = [
-                ("１階", ["LD", "キッチン", "階段室"]),
-                ("２階", ["2階廊下等", "主寝室", "洋室", "小屋裏"]),
-                ("空調機", ["AC"])
+                ("１階", ["SCL", "玄関", "トイレ", "洗面室", "階段", "LDK"]),
+                ("２階", ["洋室2", "洋室1", "WCL", "主寝室", "吹抜", "ホール"]),
+                ("その他", ["床下", "小屋裏", "階間"]),
+                ("空調機", ["AC1F", "AC2F"])
             ]
 
-            num_categories = st.number_input("カテゴリー数", min_value = 1, max_value = 10, value = 3, step = 1)
+            num_categories = st.number_input("カテゴリー数", min_value = 1, max_value = 10, value = 4, step = 1)
             custom_category_map = {}
-            cols_cat = st.columns(3)
+            cols_cat = st.columns(4)
 
             for i in range(num_categories):
-                with cols_cat[i % 3]:
+                with cols_cat[i % 4]:
                     if i < len(default_categories_list):
                         def_name = default_categories_list[i][0]
                         def_rooms = [r for r in default_categories_list[i][1] if r in all_rooms]
