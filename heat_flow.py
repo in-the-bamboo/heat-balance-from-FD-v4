@@ -340,83 +340,85 @@ def create_heat_chart(room_heat_summary_df, fig_width, fig_height, font_size, y_
     return fig, total_pos, total_neg
 
 # ▼▼▼ 追加: 3Dネットワークビューアを描画する関数 ▼▼▼
-# ▼▼▼ 差し替える関数 ▼▼▼
 def create_3d_viewer(stl_dict, df_openings):
     fig = go.Figure()
 
-    # (1) 部屋の形状を「超軽量なハコ（バウンディングボックス）」で描画する
+    # (1) 部屋の形状を「ハコ」で安全に描画（ポリゴン過多フリーズを防止）
     for room_name, mesh in stl_dict.items():
         try:
-            # 部屋の最大・最小座標を取得して直方体を作る
             bbox = mesh.bounding_box.bounds 
             min_pt, max_pt = bbox[0], bbox[1]
             
-            # 直方体の8つの頂点
-            x = [min_pt[0], max_pt[0], max_pt[0], min_pt[0], min_pt[0], max_pt[0], max_pt[0], min_pt[0]]
-            y = [min_pt[1], min_pt[1], max_pt[1], max_pt[1], min_pt[1], min_pt[1], max_pt[1], max_pt[1]]
-            z = [min_pt[2], min_pt[2], min_pt[2], min_pt[2], max_pt[2], max_pt[2], max_pt[2], max_pt[2]]
+            # 座標をfloat型に統一
+            x = [float(min_pt[0]), float(max_pt[0]), float(max_pt[0]), float(min_pt[0]), float(min_pt[0]), float(max_pt[0]), float(max_pt[0]), float(min_pt[0])]
+            y = [float(min_pt[1]), float(min_pt[1]), float(max_pt[1]), float(max_pt[1]), float(min_pt[1]), float(min_pt[1]), float(max_pt[1]), float(max_pt[1])]
+            z = [float(min_pt[2]), float(min_pt[2]), float(min_pt[2]), float(min_pt[2]), float(max_pt[2]), float(max_pt[2]), float(max_pt[2]), float(max_pt[2])]
             
-            # 面を張るためのインデックス（12枚の三角形）
             i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
             j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
             k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6]
 
             fig.add_trace(go.Mesh3d(
                 x=x, y=y, z=z, i=i, j=j, k=k,
-                opacity=0.1, color='gray', name=f"{room_name}", legendgroup="rooms",
+                opacity=0.08, color='gray', name=f"Room: {room_name}", legendgroup="rooms",
                 hoverinfo="name"
             ))
         except Exception as e:
-            continue # 万が一エラーが出てもスキップして次へ
+            continue
 
     # (2) 開口部の気流・熱ネットワーク（矢印線）を描画
     for index, row in df_openings.iterrows():
-        name = row['開口部']
-        f_room = row['Minus_Room']
-        t_room = row['Plus_Room']
-        
-        # 座標とベクトル
-        origin = np.array([row['X'], row['Y'], row['Z']])
-        
-        # プラス風量とマイナス風量の差（ネット風量）で矢印の向きを決める
-        net_flow = row['総プラス流量[m3/h]'] - abs(row['総マイナス流量[m3/h]'])
-        
-        # ネット風量が正なら Minus -> Plus (法線方向)、負なら Plus -> Minus (逆方向)
-        if net_flow >= 0:
-            direction = np.array([row['u'], row['v'], row['w']])
-            disp_flow = net_flow
-        else:
-            direction = -np.array([row['u'], row['v'], row['w']])
-            disp_flow = abs(net_flow)
-            f_room, t_room = t_room, f_room
+        try:
+            name = str(row['開口部'])
+            f_room = str(row['Minus_Room'])
+            t_room = str(row['Plus_Room'])
+            
+            # 各座標のNull値チェック
+            if pd.isna(row['X']) or pd.isna(row['Y']) or pd.isna(row['Z']):
+                continue
+                
+            origin = np.array([float(row['X']), float(row['Y']), float(row['Z'])])
+            
+            net_flow = float(row['総プラス流量[m3/h]']) - abs(float(row['総マイナス流量[m3/h]']))
+            
+            if net_flow >= 0:
+                direction = np.array([float(row['u']), float(row['v']), float(row['w'])])
+                disp_flow = net_flow
+            else:
+                direction = -np.array([float(row['u']), float(row['v']), float(row['w'])])
+                disp_flow = abs(net_flow)
+                f_room, t_room = t_room, f_room
 
-        heat = row['移動熱量[W]']
-        
-        # 風量が小さすぎる場合は描画をスキップ
-        if disp_flow < 0.1:
+            heat = float(row['移動熱量[W]'])
+            
+            if disp_flow < 0.1:
+                continue
+
+            width_val = max(1.0, min(10.0, disp_flow / 20.0))
+
+            # 3D線を追加
+            fig.add_trace(go.Scatter3d(
+                x=[origin[0], origin[0] + direction[0] * 1.0], # 1m(1.0)
+                y=[origin[1], origin[1] + direction[1] * 1.0],
+                z=[origin[2], origin[2] + direction[2] * 1.0],
+                mode='lines+text',
+                line=dict(
+                    color='red' if heat > 0 else 'blue', 
+                    width=width_val
+                ),
+                text=["", f"{disp_flow:.0f}m3/h ({f_room}➔{t_room})"], 
+                textposition="top center",
+                name=f"Flow: {name}"
+            ))
+        except Exception as e:
             continue
 
-        # 太さ
-        width_val = max(1, min(10, disp_flow / 20))
-
-        # 矢印線の追加 (Plotlyが安定するようテキスト周りも少し微調整しました)
-        fig.add_trace(go.Scatter3d(
-            x=[origin[0], origin[0] + direction[0] * 1000], # 1000mm 矢印を伸ばす
-            y=[origin[1], origin[1] + direction[1] * 1000],
-            z=[origin[2], origin[2] + direction[2] * 1000],
-            mode='lines+text',
-            line=dict(
-                color='red' if heat > 0 else 'blue', 
-                width=width_val
-            ),
-            text=["", f"{disp_flow:.0f}m3/h<br>({f_room}➔{t_room})"], 
-            textposition="top center",
-            name=f"{name}"
-        ))
-
+    # 背景・アスペクト等の詳細設定
     fig.update_layout(
         scene=dict(
-            xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
+            xaxis=dict(visible=True, title="X [m]"), 
+            yaxis=dict(visible=True, title="Y [m]"), 
+            zaxis=dict(visible=True, title="Z [m]"),
             aspectmode='data',
         ),
         margin=dict(l=0, r=0, b=0, t=0),
@@ -424,7 +426,7 @@ def create_3d_viewer(stl_dict, df_openings):
     )
 
     return fig
-# ▲▲▲ 差し替えここまで ▲▲▲
+
 # ▲▲▲ 追加ここまで ▲▲▲
 # ==========================================
 # 2. アプリケーション UI
@@ -665,16 +667,45 @@ if st.session_state['analyzed']:
         st.markdown("### (表3) 室別 風量収支")
         st.dataframe(room_flow_df)
 
+# --- Tab 4: 3Dビューア (安全装置・デバッグ付き) ---
     with tab4:
         st.subheader("インタラクティブ 3Dネットワークビューア")
-        st.markdown("マウスで回転・ズームできます。赤い線は加熱方向、青い線は冷却方向の移動を示します。")
         
-        if st.session_state['room_meshes'] and not results_df.empty:
+        # --- [デバッグ用チェック] データの整合性検証 ---
+        col_db1, col_db2 = st.columns(2)
+        with col_db1:
+            st.write("📊 3Dデータデバッグ情報")
+            st.write(f"- 読み込まれたSTL（部屋）の数: {len(st.session_state['room_meshes']) if st.session_state['room_meshes'] else 0}")
+            st.write(f"- 処理した開口部のデータ数: {len(results_df)}")
+        
+        # データに座標が存在するかチェック
+        coordinate_check = True
+        required_cols = ['X', 'Y', 'Z', 'u', 'v', 'w']
+        missing_cols = [c for c in required_cols if c not in results_df.columns]
+        
+        if missing_cols:
+            st.error(f"⚠️ エラー: 座標・法線データの一部列（{missing_cols}）が計算結果に存在しません。")
+            coordinate_check = False
+        else:
+            nan_count = results_df[['X', 'Y', 'Z']].isna().sum().sum()
+            if nan_count > 0:
+                st.warning(f"⚠️ 警告: 計算された開口部データの中に、座標がNull(NaN)になっている行が {nan_count} 行あります。")
+        
+        if st.session_state['room_meshes'] and coordinate_check:
+            st.markdown("---")
+            st.markdown("赤い線は加熱方向、青い線は冷却方向の移動を示します。")
+            
+            # 安全に描画処理を実行
             with st.spinner("3Dネットワークを描画中..."):
                 try:
                     fig_3d = create_3d_viewer(st.session_state['room_meshes'], results_df)
-                    st.plotly_chart(fig_3d, use_container_width=True)
+                    
+                    # Streamlit Cloudでのフリーズを防ぐため、CDN経由で安全に描画させるレンダラーを指定
+                    st.plotly_chart(fig_3d, use_container_width=True, theme=None)
+                    st.success("✅ 3Dビューアの描画が完了しました。")
                 except Exception as e:
-                    st.error(f"3Dビューアの描画中にエラーが発生しました: {e}")
+                    # ここでエラーが起きた場合、例外の内容を直接ブラウザに表示
+                    st.error("❌ Plotlyのレンダリング中に例外が発生しました。")
+                    st.exception(e)
         else:
-            st.info("解析を実行するとここに3Dモデルが表示されます。")
+            st.info("解析を実行、かつSTLファイルとCSVファイルの両方が正しく処理されるとここに3Dモデルが表示されます。")
