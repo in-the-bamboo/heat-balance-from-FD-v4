@@ -62,7 +62,7 @@ pip install -r requirements.txt
 
 ### Step 3: Webアプリでの解析・集計
 1. 本ツールのURL（Streamlit Community Cloudのページ）にブラウザでアクセスします。
-   [Streamlitに遷移](https://heat-balance-from-fd-v4-a6z3y84djgsf8mtygwu6q5.streamlit.app/)
+   [CFD搬送熱量分析ツール（Streamlitに遷移）](https://heat-balance-from-fd-v4-a6z3y84djgsf8mtygwu6q5.streamlit.app/)
 2. 画面のアップローダーに、以下のファイルをそれぞれドラッグ＆ドロップします。
    * Step 1で作成した **すべてのSTLファイル**（複数選択して一括アップロード）
    * Step 2で出力した **すべてのCSVファイル**（複数選択して一括アップロード）
