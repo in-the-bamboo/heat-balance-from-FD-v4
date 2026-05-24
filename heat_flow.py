@@ -375,6 +375,7 @@ with st.sidebar:
     
     st.header("4. 換気個別設定 (オプション)")
     st.markdown("給排気口が直接外気（外壁）に接していない場合、給気・排気のCSVを個別に指定します。")
+    st.info("⚠️ここに入力するCSVファイルは「3.分析ファイル」のCFD解析結果には入れない")
     
     st.subheader("給気（外気 → 室内）")
     in_file = st.file_uploader("給気口CSVファイルをアップロード", type="csv", key="vent_in_uploader")
