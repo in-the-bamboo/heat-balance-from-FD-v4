@@ -110,7 +110,7 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             continue
 
         # --- (B) 中心点・法線の計算とSTLによる部屋判定 ---
-if file_info['type'] == 'normal':
+        if file_info['type'] == 'normal':
             try:
                 center_pt = np.array([df[x_col[0]].mean(), df[y_col[0]].mean(), df[z_col[0]].mean()])
                 normal_vec = np.array([0.0, 0.0, 0.0])
