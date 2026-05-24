@@ -381,7 +381,7 @@ with st.sidebar:
     in_file = st.file_uploader("給気口CSVファイルをアップロード", type="csv", key="vent_in_uploader")
     in_room = st.text_input("SAが流入する部屋名（STL名と一致させてください）", value="床下")
     
-    st.subheader("垂直排気（室内 → 外気）")
+    st.subheader("排気（室内 → 外気）")
     out_file = st.file_uploader("排気口CSVファイルをアップロード", type="csv", key="vent_out_uploader")
     out_room = st.text_input("EAが流出する部屋名（STL名と一致させてください）", value="ホール")
 # --- メイン処理 ---
