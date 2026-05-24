@@ -149,12 +149,14 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             # 給気CSV：[外気 ⇄ 指定部屋] に強制固定
             found_plus_room = file_info['target_room']
             found_minus_room = "外気"
+            df[flow_col] = df[flow_col].abs()
             logs.append(f"🔧 換気処理(給気): '{file_name}' を [外気 ⇄ {found_plus_room}] として処理します。")
 
         elif file_info['type'] == 'vent_out':
             # 排気CSV：[指定部屋 ⇄ 外気] に強制固定
             found_plus_room = "外気"
             found_minus_room = file_info['target_room']
+            df[flow_col] = df[flow_col].abs()
             logs.append(f"🔧 換気処理(排気): '{file_name}' を [{found_minus_room} ⇄ 外気] として処理します。")
         # --- (C) 熱量・風量の集計計算 ---
         try:
