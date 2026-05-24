@@ -8,7 +8,7 @@ import io
 import matplotlib_fontja
 import numpy as np
 import trimesh  # 3Dメッシュの内外判定用ライブラリ
-import plotly.graph_objects
+
 # ==========================================
 # 1. 関数定義
 # ==========================================
@@ -22,7 +22,7 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
 
     # --- 1. 部屋のSTLファイルを読み込んで辞書化 ---
     if not stl_files:
-        return None, None, None, ["❌ STLファイルがアップロードされていません。"], None
+        return None, None, None, ["❌ STLファイルがアップロードされていません。"]
     
     for stl_file in stl_files:
         try:
@@ -104,14 +104,7 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
             df[y_col[0]] = pd.to_numeric(df[y_col[0]], errors='coerce')
             df[z_col[0]] = pd.to_numeric(df[z_col[0]], errors='coerce')
             df.dropna(subset=[flow_col, temp_col, x_col[0], y_col[0], z_col[0]], inplace=True)
-            # ▼追加: 3Dビューア用に、種類に関わらず中心点と法線を計算しておく ▼
-            center_pt = np.array([df[x_col[0]].mean(), df[y_col[0]].mean(), df[z_col[0]].mean()])
-            normal_vec = np.array([0.0, 0.0, 0.0])
-            if detected_axis == 'x':   normal_vec = np.array([1.0, 0.0, 0.0])
-            elif detected_axis == 'y': normal_vec = np.array([0.0, 1.0, 0.0])
-            elif detected_axis == 'z': normal_vec = np.array([0.0, 0.0, 1.0])
 
-        
         except Exception as e:
             logs.append(f"❌ CSV読み込みエラー: {file_name} ({e})")
             continue
@@ -189,13 +182,7 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
                 '平均温度[℃](風量加重平均)': mean_temp,
                 '総プラス流量[m3/h]': gross_positive_flow,
                 '総マイナス流量[m3/h]': gross_negative_flow,
-                '移動熱量[W]': net_heat_watt,
-                'X': center_pt[0],
-                'Y': center_pt[1],
-                'Z': center_pt[2],
-                'u': normal_vec[0],
-                'v': normal_vec[1],
-                'w': normal_vec[2]
+                '移動熱量[W]': net_heat_watt
             })
             logs.append(f"✅ 計算成功: {file_name} [{found_plus_room} ⇄ {found_minus_room}]")
 
@@ -204,7 +191,7 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
 
     # 結果をDataFrame化
     if not opening_results_list:
-        return None, None, None, logs, None
+        return None, None, None, logs
     
     results_df = pd.DataFrame(opening_results_list)
 
@@ -247,7 +234,7 @@ def process_cfd_files_with_stl(stl_files, cfd_files, rho, cp, threshold, offset_
         '風量収支[m3/h]': flow_df.get('流出', 0) - flow_df.get('流入', 0)
     }).reset_index()
 
-    return results_df, room_heat_summary_df, room_flow_summary_df, logs, room_meshes
+    return results_df, room_heat_summary_df, room_flow_summary_df, logs
 
 def create_heat_chart(room_heat_summary_df, fig_width, fig_height, font_size, y_max, custom_colors, show_legend, category_map, mode):
     if "暖房" in mode:
@@ -339,95 +326,6 @@ def create_heat_chart(room_heat_summary_df, fig_width, fig_height, font_size, y_
     
     return fig, total_pos, total_neg
 
-# ▼▼▼ 追加: 3Dネットワークビューアを描画する関数 ▼▼▼
-def create_3d_viewer(stl_dict, df_openings):
-    fig = go.Figure()
-
-    # (1) 部屋の形状を「ハコ」で安全に描画（ポリゴン過多フリーズを防止）
-    for room_name, mesh in stl_dict.items():
-        try:
-            bbox = mesh.bounding_box.bounds 
-            min_pt, max_pt = bbox[0], bbox[1]
-            
-            # 座標をfloat型に統一
-            x = [float(min_pt[0]), float(max_pt[0]), float(max_pt[0]), float(min_pt[0]), float(min_pt[0]), float(max_pt[0]), float(max_pt[0]), float(min_pt[0])]
-            y = [float(min_pt[1]), float(min_pt[1]), float(max_pt[1]), float(max_pt[1]), float(min_pt[1]), float(min_pt[1]), float(max_pt[1]), float(max_pt[1])]
-            z = [float(min_pt[2]), float(min_pt[2]), float(min_pt[2]), float(min_pt[2]), float(max_pt[2]), float(max_pt[2]), float(max_pt[2]), float(max_pt[2])]
-            
-            i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
-            j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
-            k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6]
-
-            fig.add_trace(go.Mesh3d(
-                x=x, y=y, z=z, i=i, j=j, k=k,
-                opacity=0.08, color='gray', name=f"Room: {room_name}", legendgroup="rooms",
-                hoverinfo="name"
-            ))
-        except Exception as e:
-            continue
-
-    # (2) 開口部の気流・熱ネットワーク（矢印線）を描画
-    for index, row in df_openings.iterrows():
-        try:
-            name = str(row['開口部'])
-            f_room = str(row['Minus_Room'])
-            t_room = str(row['Plus_Room'])
-            
-            # 各座標のNull値チェック
-            if pd.isna(row['X']) or pd.isna(row['Y']) or pd.isna(row['Z']):
-                continue
-                
-            origin = np.array([float(row['X']), float(row['Y']), float(row['Z'])])
-            
-            net_flow = float(row['総プラス流量[m3/h]']) - abs(float(row['総マイナス流量[m3/h]']))
-            
-            if net_flow >= 0:
-                direction = np.array([float(row['u']), float(row['v']), float(row['w'])])
-                disp_flow = net_flow
-            else:
-                direction = -np.array([float(row['u']), float(row['v']), float(row['w'])])
-                disp_flow = abs(net_flow)
-                f_room, t_room = t_room, f_room
-
-            heat = float(row['移動熱量[W]'])
-            
-            if disp_flow < 0.1:
-                continue
-
-            width_val = max(1.0, min(10.0, disp_flow / 20.0))
-
-            # 3D線を追加
-            fig.add_trace(go.Scatter3d(
-                x=[origin[0], origin[0] + direction[0] * 1.0], # 1m(1.0)
-                y=[origin[1], origin[1] + direction[1] * 1.0],
-                z=[origin[2], origin[2] + direction[2] * 1.0],
-                mode='lines+text',
-                line=dict(
-                    color='red' if heat > 0 else 'blue', 
-                    width=width_val
-                ),
-                text=["", f"{disp_flow:.0f}m3/h ({f_room}➔{t_room})"], 
-                textposition="top center",
-                name=f"Flow: {name}"
-            ))
-        except Exception as e:
-            continue
-
-    # 背景・アスペクト等の詳細設定
-    fig.update_layout(
-        scene=dict(
-            xaxis=dict(visible=True, title="X [m]"), 
-            yaxis=dict(visible=True, title="Y [m]"), 
-            zaxis=dict(visible=True, title="Z [m]"),
-            aspectmode='data',
-        ),
-        margin=dict(l=0, r=0, b=0, t=0),
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-    )
-
-    return fig
-
-# ▲▲▲ 追加ここまで ▲▲▲
 # ==========================================
 # 2. アプリケーション UI
 # ==========================================
@@ -494,8 +392,7 @@ if 'analyzed' not in st.session_state:
     st.session_state['room_heat_df'] = None
     st.session_state['room_flow_df'] = None
     st.session_state['logs'] = []
-    st.session_state['room_meshes'] = None
-    
+
 if st.button("解析実行", type="primary"):
     if not cfd_files and not in_file and not out_file:
         st.warning("CFD解析結果のCSVをアップロードしてください。")
@@ -511,7 +408,7 @@ if st.button("解析実行", type="primary"):
             
             # 2. 関数の引数の最後に「vent_settings」を追加して呼び出す
             # (※ stl_files はローカル自動読み込みにしたため不要になっています)
-            results_df, room_heat_df, room_flow_df, logs, room_meshes = process_cfd_files_with_stl(
+            results_df, room_heat_df, room_flow_df, logs = process_cfd_files_with_stl(
                 stl_files, cfd_files, rho, cp, threshold, offset_dist, vent_settings
             )
             
@@ -539,7 +436,7 @@ if st.session_state['analyzed']:
     room_heat_df = st.session_state['room_heat_df']
     room_flow_df = st.session_state['room_flow_df']
 
-    tab1, tab2, tab3, tab4 = st.tabs(["風量収支チェック", "熱量分配グラフ", "計算詳細", "3Dネットワーク"])
+    tab1, tab2, tab3 = st.tabs(["風量収支チェック", "熱量分配グラフ", "計算詳細"])
 
     # --- Tab 1: 風量バランス ---
     with tab1:
@@ -666,46 +563,3 @@ if st.session_state['analyzed']:
         
         st.markdown("### (表3) 室別 風量収支")
         st.dataframe(room_flow_df)
-
-# --- Tab 4: 3Dビューア (安全装置・デバッグ付き) ---
-    with tab4:
-        st.subheader("インタラクティブ 3Dネットワークビューア")
-        
-        # --- [デバッグ用チェック] データの整合性検証 ---
-        col_db1, col_db2 = st.columns(2)
-        with col_db1:
-            st.write("📊 3Dデータデバッグ情報")
-            st.write(f"- 読み込まれたSTL（部屋）の数: {len(st.session_state['room_meshes']) if st.session_state['room_meshes'] else 0}")
-            st.write(f"- 処理した開口部のデータ数: {len(results_df)}")
-        
-        # データに座標が存在するかチェック
-        coordinate_check = True
-        required_cols = ['X', 'Y', 'Z', 'u', 'v', 'w']
-        missing_cols = [c for c in required_cols if c not in results_df.columns]
-        
-        if missing_cols:
-            st.error(f"⚠️ エラー: 座標・法線データの一部列（{missing_cols}）が計算結果に存在しません。")
-            coordinate_check = False
-        else:
-            nan_count = results_df[['X', 'Y', 'Z']].isna().sum().sum()
-            if nan_count > 0:
-                st.warning(f"⚠️ 警告: 計算された開口部データの中に、座標がNull(NaN)になっている行が {nan_count} 行あります。")
-        
-        if st.session_state['room_meshes'] and coordinate_check:
-            st.markdown("---")
-            st.markdown("赤い線は加熱方向、青い線は冷却方向の移動を示します。")
-            
-            # 安全に描画処理を実行
-            with st.spinner("3Dネットワークを描画中..."):
-                try:
-                    fig_3d = create_3d_viewer(st.session_state['room_meshes'], results_df)
-                    
-                    # Streamlit Cloudでのフリーズを防ぐため、CDN経由で安全に描画させるレンダラーを指定
-                    st.plotly_chart(fig_3d, use_container_width=True, theme=None)
-                    st.success("✅ 3Dビューアの描画が完了しました。")
-                except Exception as e:
-                    # ここでエラーが起きた場合、例外の内容を直接ブラウザに表示
-                    st.error("❌ Plotlyのレンダリング中に例外が発生しました。")
-                    st.exception(e)
-        else:
-            st.info("解析を実行、かつSTLファイルとCSVファイルの両方が正しく処理されるとここに3Dモデルが表示されます。")
