@@ -325,7 +325,64 @@ def create_heat_chart(room_heat_summary_df, fig_width, fig_height, font_size, y_
     total_neg = active.sum()
     
     return fig, total_pos, total_neg
+    
+def create_sankey_diagram(df_openings):
+    # 1. 登場するすべての部屋名をリストアップ
+    all_rooms = list(set(df_openings['Minus_Room'].tolist() + df_openings['Plus_Room'].tolist()))
+    
+    # 部屋名をインデックス番号に変換する辞書
+    room_indices = {room: i for i, room in enumerate(all_rooms)}
+    
+    sources = []
+    targets = []
+    values = []
+    
+    # 2. 流れ（リンク）の作成
+    for index, row in df_openings.iterrows():
+        f_room = str(row['Minus_Room'])
+        t_room = str(row['Plus_Room'])
+        
+        # プラス風量とマイナス風量の差（正味の風量）
+        net_flow = float(row['総プラス流量[m3/h]']) - abs(float(row['総マイナス流量[m3/h]']))
+        
+        # 風量が小さすぎる場合はスキップ（ノイズを減らすため）
+        if abs(net_flow) < 0.1:
+            continue
+            
+        # 流れの向きに合わせて Source (元) と Target (先) を設定
+        if net_flow > 0:
+            sources.append(room_indices[f_room])
+            targets.append(room_indices[t_room])
+            values.append(net_flow)
+        elif net_flow < 0:
+            sources.append(room_indices[t_room])
+            targets.append(room_indices[f_room])
+            values.append(abs(net_flow))
 
+    # 3. Plotlyでサンキーダイアグラムを作成
+    fig = go.Figure(data=[go.Sankey(
+        arrangement="snap",
+        node = dict(
+          pad = 20,
+          thickness = 30,
+          line = dict(color = "gray", width = 0.5),
+          label = all_rooms,
+          color = "#87CEEB" # ノードの色（水色）
+        ),
+        link = dict(
+          source = sources,
+          target = targets,
+          value = values,
+          color = "rgba(135, 206, 235, 0.4)" # 帯の色（半透明の水色）
+        )
+    )])
+
+    fig.update_layout(
+        title_text="風量ネットワーク [m3/h]", 
+        font_size=14,
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+    return fig
 # ==========================================
 # 2. アプリケーション UI
 # ==========================================
@@ -436,7 +493,7 @@ if st.session_state['analyzed']:
     room_heat_df = st.session_state['room_heat_df']
     room_flow_df = st.session_state['room_flow_df']
 
-    tab1, tab2, tab3 = st.tabs(["風量収支チェック", "熱量分配グラフ", "計算詳細"])
+    tab1, tab2, tab3, tab4 = st.tabs(["風量収支チェック", "熱量分配グラフ", "計算詳細", "フロー図"])
 
     # --- Tab 1: 風量バランス ---
     with tab1:
@@ -563,3 +620,12 @@ if st.session_state['analyzed']:
         
         st.markdown("### (表3) 室別 風量収支")
         st.dataframe(room_flow_df)
+    with tab4:
+        st.subheader("部屋間の風量フロー図")
+        st.markdown("帯の太さが風量の大きさを表しています。マウスを乗せると詳細な数値が確認できます。")
+    
+        try:
+            fig_sankey = create_sankey_diagram(results_df)
+            st.plotly_chart(fig_sankey, use_container_width=True)
+        except Exception as e:
+            st.error(f"フロー図の作成中にエラーが発生しました: {e}")
