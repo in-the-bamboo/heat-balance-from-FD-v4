@@ -8,6 +8,7 @@ import io
 import matplotlib_fontja
 import numpy as np
 import trimesh  # 3Dメッシュの内外判定用ライブラリ
+import plotly.graph_objects as go
 
 # ==========================================
 # 1. 関数定義
